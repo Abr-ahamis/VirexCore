@@ -1,0 +1,51 @@
+# Service Triggering Rules
+# Format: service_keyword:tool_name:script_name
+# Lines starting with # are comments
+
+# Web Services
+wordpress:wpscan:wpscan.py
+joomla:joomscan:wpscan.py
+drupal:droopescan:wpscan.py
+magento:magentoscan:wpscan.py
+apache:nikto:nikto.py
+nginx:nikto:nikto.py
+http:nikto:nikto.py
+https:nikto:nikto.py
+web:nikto:nikto.py
+
+# Database Services
+mysql:sqlmap:sqlmap.py
+mssql:sqlmap:sqlmap.py
+postgresql:sqlmap:sqlmap.py
+oracle:sqlmap:sqlmap.py
+mongodb:mongodb-exploit:sqlmap.py
+redis:redis-cli:sqlmap.py
+elasticsearch:elasticsearch-exploit:sqlmap.py
+
+# Network Services
+smb:enum4linux:enum4linux.py
+netbios:enum4linux:enum4linux.py
+cifs:enum4linux:enum4linux.py
+ftp:ftp-anon-check:ftp_anon_check.py
+ssh:ssh-scan:ftp_anon_check.py
+telnet:telnet-scan:ftp_anon_check.py
+rpc:rpcclient:enum4linux.py
+nfs:nfs-scan:enum4linux.py
+
+# Application Services
+jenkins:jenkins-exploit:nikto.py
+docker:docker-exploit:nikto.py
+tomcat:metasploit:nikto.py
+jboss:jboss-exploit:nikto.py
+
+# Protocol Services
+snmp:snmp-check:enum4linux.py
+ldap:ldapsearch:enum4linux.py
+rdp:rdp-scan:ftp_anon_check.py
+vnc:vnc-scan:ftp_anon_check.py
+
+# Additional Services
+pop3:pop3-scan:ftp_anon_check.py
+imap:imap-scan:ftp_anon_check.py
+smtp:smtp-enum:enum4linux.py
+dns:dns-enum:enum4linux.py
