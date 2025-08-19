@@ -20,8 +20,8 @@ RESET = "\033[0m"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Configuration - using paths relative to script location
-TRIGGER_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), 'Resources', 'Wordlists', 'trigger.txt')
-TOOLS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), 'Resources', 'tools')
+TRIGGER_FILE = os.path.join(SCRIPT_DIR, 'Wordlists', 'trigger.txt')
+TOOLS_DIR = os.path.join(SCRIPT_DIR, 'tools')
 RUSTSCAN_DEFAULT = './rustscan.txt'
 
 # Default credentials for various services

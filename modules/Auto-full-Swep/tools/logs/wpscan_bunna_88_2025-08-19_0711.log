@@ -1,0 +1,15 @@
+Starting WPScan against bunna:88
+Log file: logs/wpscan_bunna_88_2025-08-19_0711.log
+Running WPScan enumeration...
+========================== WPScan Scan ==========================
+-------------------------------------------------------------------
+-------------------------------------------------------------------
+================[ 🔍 Interesting Findings: ]=======================
+-------------------------------------------------------------------
+=================[ User Enumeration: ]=============================
+[!] No users found
+
+[!] No users found. Skipping password attack.
+
+[✓] Full report saved to: /tmp/VirexCore/bunna/wpscan/report.txt
+[✓] Log file: logs/wpscan_bunna_88_2025-08-19_0711.log
