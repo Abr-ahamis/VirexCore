@@ -2,7 +2,7 @@
 # Format: service_keyword:tool_name:script_name
 # Lines starting with # are comments
 
-# Web Services
+# Web Services tools
 wordpress:wpscan:wpscan.py
 joomla:joomscan:wpscan.py
 drupal:droopescan:wpscan.py
