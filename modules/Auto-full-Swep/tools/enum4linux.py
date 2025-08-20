@@ -1,37 +1,89 @@
 #!/usr/bin/env python3
-
-import os
-import sys
 import subprocess
+import sys
+import os
+import time
+import select
 import re
+import threading
+import queue
 from datetime import datetime
 from pathlib import Path
 
-# Colors
-RED = "\033[1;31m"
-GREEN = "\033[1;32m"
-YELLOW = "\033[1;33m"
-CYAN = "\033[1;36m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
+# Color codes for output
+class Colors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def strip_ansi_codes(text):
+    """Remove ANSI color codes from WPScan output."""
+    ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+    return ansi_escape.sub('', text)
 
 def banner():
-    print(f"{CYAN}===============(Enum4linux)==================={RESET}")
+    print(f"{Colors.HEADER}========================== WPScan Automation =========================={Colors.ENDC}")
+    print(f"{Colors.HEADER}==================================================================={Colors.ENDC}")
 
-def run_enum4linux(target_ip, output_file, with_creds=False, username="", password=""):
-    """Run enum4linux with specified options"""
-    print(f"{YELLOW}[~] Running: enum4linux -a {target_ip}{RESET}")
+def check_installation():
+    try:
+        subprocess.run(["which", "wpscan"], check=True, stdout=subprocess.PIPE)
+        return True
+    except subprocess.CalledProcessError:
+        print(f"{Colors.WARNING}⚠️ wpscan not found. Installing...{Colors.ENDC}")
+        try:
+            subprocess.run(["apt-get", "update"], check=True)
+            subprocess.run(["apt-get", "install", "-y", "wpscan"], check=True)
+            print(f"{Colors.OKGREEN}✅ wpscan installed successfully{Colors.ENDC}")
+            return True
+        except Exception as e:
+            print(f"{Colors.FAIL}❌ Failed to install wpscan: {e}{Colors.ENDC}")
+            return False
+
+def prompt_with_timeout(prompt, default=None, timeout=3):
+    print(prompt)
+    print(f"{Colors.WARNING}⏱️ Timeout in {timeout} seconds (default: {default}){Colors.ENDC}")
+    
+    rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+    if rlist:
+        user_input = sys.stdin.readline().rstrip()
+        return user_input if user_input else default
+    else:
+        print(f"{Colors.WARNING}⏱️ Timeout, using default: {default}{Colors.ENDC}")
+        return default
+
+def ask_wordlist():
+    print(f"{Colors.HEADER}=========[ 🔐 Password Brute Force Attempt (XML-RPC): ]=============={Colors.ENDC}")
+    choice = input(f"{Colors.OKBLUE}[?] Default ../../rockyou.txt (y/n)? {Colors.ENDC}").strip().lower()
+    if choice == 'y':
+        wordlist = "/usr/share/wordlists/rockyou.txt"
+        if not os.path.isfile(wordlist):
+            print(f"{Colors.FAIL}[!] rockyou.txt not found in default location.{Colors.ENDC}")
+            wordlist = "rockyou.txt"
+            if not os.path.isfile(wordlist):
+                print(f"{Colors.FAIL}[!] rockyou.txt not found in current directory.{Colors.ENDC}")
+                exit(1)
+    elif choice == 'n':
+        wordlist = input(f"{Colors.OKBLUE}[!] Enter the path: {Colors.ENDC}").strip()
+        if not os.path.isfile(wordlist):
+            print(f"{Colors.FAIL}[!] File not found. Exiting.{Colors.ENDC}")
+            exit(1)
+    else:
+        print(f"{Colors.FAIL}[!] Invalid choice. Exiting.{Colors.ENDC}")
+        exit(1)
+    return wordlist
+
+def run_wpscan_enum(target_url, output_file):
+    """Run WPScan enumeration with specified options"""
+    print(f"{Colors.WARNING}[~] Running: wpscan --url {target_url} -e u,vp,vt --format cli --no-banner{Colors.ENDC}")
     
     try:
-        # Build command
-        cmd = ["enum4linux", "-a"]
-        
-        if with_creds and username:
-            cmd.extend(["-u", username])
-            if password:
-                cmd.extend(["-p", password])
-        
-        cmd.append(target_ip)
+        cmd = ["wpscan", "--url", target_url, "-e", "u,vp,vt", "--format", "cli", "--no-banner"]
         
         result = subprocess.run(
             cmd,
@@ -50,266 +102,384 @@ def run_enum4linux(target_ip, output_file, with_creds=False, username="", passwo
         return result.stdout, result.returncode == 0
         
     except subprocess.TimeoutExpired:
-        print(f"{RED}[!] enum4linux timed out{RESET}")
+        print(f"{Colors.FAIL}[!] WPScan timed out{Colors.ENDC}")
         return "", False
     except FileNotFoundError:
-        print(f"{RED}[!] enum4linux not found. Please install enum4linux.{RESET}")
+        print(f"{Colors.FAIL}[!] WPScan not found. Please install WPScan.{Colors.ENDC}")
         return "", False
     except Exception as e:
-        print(f"{RED}[!] enum4linux error: {e}{RESET}")
+        print(f"{Colors.FAIL}[!] WPScan error: {e}{Colors.ENDC}")
         return "", False
 
-def run_smbclient_check(target_ip):
-    """Check SMB shares using smbclient"""
+def run_wpscan_attack(target_url, username, wordlist, output_file):
+    """Run WPScan password attack with specified options"""
+    print(f"{Colors.WARNING}[~] Running: wpscan --url {target_url} --password-attack xmlrpc -U {username} -P {wordlist} --max-threads 10 --no-banner{Colors.ENDC}")
+    
+    # Save username to a temp file
+    temp_user_file = "/tmp/temp_user.txt"
+    with open(temp_user_file, "w") as f:
+        f.write(username + "\n")
+    
     try:
+        cmd = ["wpscan", "--url", target_url, "--password-attack", "xmlrpc", "-U", temp_user_file, "-P", wordlist, "--max-threads", "10", "--no-banner"]
+        
         result = subprocess.run(
-            ["smbclient", "-L", target_ip, "-N"],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=30
+            timeout=600  # 10 minute timeout
         )
-        return result.stdout
-    except:
-        return ""
+        
+        # Save output
+        with open(output_file, 'a') as f:
+            f.write(f"\n\n=== PASSWORD ATTACK for {username} ===\n")
+            f.write(result.stdout)
+            if result.stderr:
+                f.write(f"\n--- STDERR ---\n{result.stderr}")
+        
+        return result.stdout, result.returncode == 0
+        
+    except subprocess.TimeoutExpired:
+        print(f"{Colors.FAIL}[!] WPScan attack timed out{Colors.ENDC}")
+        return "", False
+    except FileNotFoundError:
+        print(f"{Colors.FAIL}[!] WPScan not found. Please install WPScan.{Colors.ENDC}")
+        return "", False
+    except Exception as e:
+        print(f"{Colors.FAIL}[!] WPScan attack error: {e}{Colors.ENDC}")
+        return "", False
+    finally:
+        # Clean up temp file
+        if os.path.exists(temp_user_file):
+            os.remove(temp_user_file)
 
-def run_rpcclient_check(target_ip):
-    """Check RPC services using rpcclient"""
-    try:
-        # Try anonymous connection
-        result = subprocess.run(
-            ["rpcclient", "-U", "", "-N", target_ip, "-c", "enumdomusers"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30
-        )
-        return result.stdout
-    except:
-        return ""
-
-def extract_enum_info(output):
-    """Extract key information from enum4linux output"""
+def extract_wpscan_info(output):
+    """Extract key information from WPScan output"""
     info = {
-        'workgroup': None,
-        'domain': None,
-        'domain_sid': None,
+        'target_url': None,
+        'server_info': {},
+        'wordpress_version': None,
+        'theme': {},
+        'plugins': [],
         'users': [],
-        'groups': [],
-        'shares': [],
-        'password_policy': {},
-        'os_info': None
+        'vulnerabilities': [],
+        'interesting_findings': []
     }
     
     lines = output.split('\n')
-    current_section = None
     
+    # Extract target URL
     for line in lines:
-        line = line.strip()
+        if "[+] URL:" in line:
+            url_match = re.search(r'\[+\] URL:\s*(.+)', line)
+            if url_match:
+                info['target_url'] = url_match.group(1).strip()
+    
+    # Extract server information
+    server_section = False
+    for line in lines:
+        if "[+] Headers" in line:
+            server_section = True
+            continue
+        if server_section and line.strip().startswith("|"):
+            if " - Server:" in line:
+                server_match = re.search(r'\|\s+- Server:\s*(.+)', line)
+                if server_match:
+                    info['server_info']['server'] = server_match.group(1).strip()
+            elif " - X-Powered-By:" in line:
+                powered_match = re.search(r'\|\s+- X-Powered-By:\s*(.+)', line)
+                if powered_match:
+                    info['server_info']['x_powered_by'] = powered_match.group(1).strip()
+        elif server_section and not line.strip().startswith("|"):
+            server_section = False
+    
+    # Extract WordPress version
+    for line in lines:
+        if "[+] WordPress version" in line and "identified" in line:
+            version_match = re.search(r'WordPress version\s+([0-9.]+)', line)
+            if version_match:
+                info['wordpress_version'] = version_match.group(1)
+    
+    # Extract theme information
+    theme_section = False
+    for line in lines:
+        if "[+] WordPress theme in use:" in line:
+            theme_match = re.search(r'WordPress theme in use:\s*(.+)', line)
+            if theme_match:
+                info['theme']['name'] = theme_match.group(1).strip()
+            theme_section = True
+            continue
         
-        # Workgroup/Domain detection
-        if 'domain/workgroup name:' in line.lower():
-            domain_match = re.search(r'domain/workgroup name:\s*(.+)', line, re.IGNORECASE)
-            if domain_match:
-                domain_name = domain_match.group(1).strip()
-                if not info['workgroup']:
-                    info['workgroup'] = domain_name
-                elif domain_name != info['workgroup']:
-                    info['domain'] = domain_name
+        if theme_section and line.strip().startswith("|"):
+            if " - Location:" in line:
+                location_match = re.search(r'\|\s+- Location:\s*(.+)', line)
+                if location_match:
+                    info['theme']['location'] = location_match.group(1).strip()
+            elif " - Version:" in line:
+                version_match = re.search(r'\|\s+- Version:\s*(.+)', line)
+                if version_match:
+                    info['theme']['version'] = version_match.group(1).strip()
+        elif theme_section and not line.strip().startswith("|"):
+            theme_section = False
+    
+    # Extract users
+    users_section = False
+    for line in lines:
+        if "[i] User(s) Identified:" in line:
+            users_section = True
+            continue
         
-        # Domain SID
-        if 'domain sid:' in line.lower():
-            sid_match = re.search(r'domain sid:\s*(S-\d+-\d+-\d+(?:-\d+)*)', line, re.IGNORECASE)
-            if sid_match:
-                info['domain_sid'] = sid_match.group(1)
-        
-        # Users enumeration
-        if 'user:' in line.lower() and 'rid:' in line.lower():
-            user_match = re.search(r'user:\s*(.+?)\s+rid:\s*(\d+)', line, re.IGNORECASE)
-            if user_match:
-                username, rid = user_match.groups()
-                info['users'].append({'name': username.strip(), 'rid': rid})
-        
-        # Groups enumeration
-        if 'group:' in line.lower() and 'rid:' in line.lower():
-            group_match = re.search(r'group:\s*(.+?)\s+rid:\s*(\d+)', line, re.IGNORECASE)
-            if group_match:
-                groupname, rid = group_match.groups()
-                info['groups'].append({'name': groupname.strip(), 'rid': rid})
-        
-        # Shares enumeration
-        if 'sharename:' in line.lower() or 'share:' in line.lower():
-            share_match = re.search(r'(?:sharename|share):\s*(.+?)(?:\s+type:\s*(.+?))?$', line, re.IGNORECASE)
-            if share_match:
-                sharename = share_match.group(1).strip()
-                share_type = share_match.group(2).strip() if share_match.group(2) else "Unknown"
-                info['shares'].append({'name': sharename, 'type': share_type})
-        
-        # Password policy
-        if 'minimum password length:' in line.lower():
-            length_match = re.search(r'minimum password length:\s*(\d+)', line, re.IGNORECASE)
-            if length_match:
-                info['password_policy']['min_length'] = length_match.group(1)
-        
-        if 'password history:' in line.lower():
-            history_match = re.search(r'password history:\s*(\d+)', line, re.IGNORECASE)
-            if history_match:
-                info['password_policy']['history'] = history_match.group(1)
-        
-        if 'maximum password age:' in line.lower():
-            age_match = re.search(r'maximum password age:\s*(.+)', line, re.IGNORECASE)
-            if age_match:
-                info['password_policy']['max_age'] = age_match.group(1).strip()
-        
-        # OS Information
-        if 'os:' in line.lower() and not info['os_info']:
-            os_match = re.search(r'os:\s*(.+)', line, re.IGNORECASE)
-            if os_match:
-                info['os_info'] = os_match.group(1).strip()
+        if users_section and line.strip().startswith("[+]"):
+            # Extract username (everything after [+])
+            username = line[3:].strip()
+            # Skip if it's not a username (like "Finished:")
+            if username and not username.startswith("Finished:") and not username.startswith("Requests Done:"):
+                info['users'].append(username)
+        # Check if we've reached the end of the user section
+        elif users_section and (line.strip().startswith("[+] Finished:") or line.strip().startswith("[+] Requests Done:")):
+            users_section = False
+            break
+        # If we encounter a line starting with [!] or [i] after users, we're done
+        elif users_section and (line.strip().startswith("[!]") or line.strip().startswith("[i]")) and info['users']:
+            users_section = False
+            break
+    
+    # Extract interesting findings
+    for line in lines:
+        if line.strip().startswith("[+]") and "XML-RPC seems to be enabled" in line:
+            info['interesting_findings'].append({
+                'type': 'xmlrpc',
+                'description': 'XML-RPC seems to be enabled',
+                'url': re.search(r'http://[^\s]+', line).group(0) if re.search(r'http://[^\s]+', line) else None
+            })
+        elif line.strip().startswith("[+]") and "WordPress readme found" in line:
+            info['interesting_findings'].append({
+                'type': 'readme',
+                'description': 'WordPress readme found',
+                'url': re.search(r'http://[^\s]+', line).group(0) if re.search(r'http://[^\s]+', line) else None
+            })
+        elif line.strip().startswith("[+]") and "The external WP-Cron seems to be enabled" in line:
+            info['interesting_findings'].append({
+                'type': 'wp-cron',
+                'description': 'The external WP-Cron seems to be enabled',
+                'url': re.search(r'http://[^\s]+', line).group(0) if re.search(r'http://[^\s]+', line) else None
+            })
     
     return info
 
-def display_results(info, target_ip):
+def extract_attack_info(output):
+    """Extract password attack information from WPScan output"""
+    info = {
+        'success': False,
+        'username': None,
+        'password': None,
+        'progress': None
+    }
+    
+    # Check for successful login
+    for line in output.split('\n'):
+        if "[SUCCESS]" in line:
+            success_match = re.search(r'\[SUCCESS\]\s*-\s*(\S+)\s*/\s*(.+)', line)
+            if success_match:
+                info['success'] = True
+                info['username'] = success_match.group(1)
+                info['password'] = success_match.group(2).strip()
+                break
+        
+        # Extract progress information
+        if "Progress:" in line:
+            progress_match = re.search(r'Progress:\s*([0-9.]+)%', line)
+            if progress_match:
+                info['progress'] = progress_match.group(1)
+    
+    return info
+
+def display_enum_results(info, target_ip, port):
     """Display extracted enumeration information"""
     
-    print(f"{GREEN}1) Default 3sec{RESET}")
-    print(f"{GREEN}2) With Credentials{RESET}")
-    print(f"{CYAN}================================================{RESET}")
-    print(f"{YELLOW}[+] select ? 1{RESET}")
-    print(f"{CYAN}==========( Target Information )================================={RESET}")
-    print(f"{GREEN}[+] target-ip [{target_ip}]{RESET}")
-    print(f"{GREEN}[+] Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{RESET}")
+    print(f"{Colors.OKGREEN}1) Default 3sec{Colors.ENDC}")
+    print(f"{Colors.OKGREEN}2) With Credentials{Colors.ENDC}")
+    print(f"{Colors.OKBLUE}================================================{Colors.ENDC}")
+    print(f"{Colors.WARNING}[+] select ? 1{Colors.ENDC}")
+    print(f"{Colors.OKBLUE}==========( Target Information )================================={Colors.ENDC}")
+    print(f"{Colors.OKGREEN}[+] target-ip [{target_ip}:{port}]{Colors.ENDC}")
+    print(f"{Colors.OKGREEN}[+] Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Colors.ENDC}")
     
-    # Workgroup/Domain Information
-    print(f"{CYAN}===============( Enumerating Workgroup/Domain on {target_ip} )================={RESET}")
-    if info['workgroup']:
-        print(f"{GREEN}[+] Found domain/workgroup name: {info['workgroup']}{RESET}")
-    if info['domain'] and info['domain'] != info['workgroup']:
-        print(f"{GREEN}[+] Found domain/workgroup name: {info['domain']}{RESET}")
+    # Server Information
+    print(f"{Colors.OKBLUE}===============( Server Information )================={Colors.ENDC}")
+    if info['server_info'].get('server'):
+        print(f"{Colors.OKGREEN}[+] Server: {info['server_info']['server']}{Colors.ENDC}")
+    if info['server_info'].get('x_powered_by'):
+        print(f"{Colors.OKGREEN}[+] X-Powered-By: {info['server_info']['x_powered_by']}{Colors.ENDC}")
     
-    # Session Check
-    print(f"{CYAN}=================( Session Check on {target_ip} )================{RESET}")
-    print(f"{GREEN}[+] Server allows sessions with username '', password ''{RESET}")
+    # WordPress Version
+    if info['wordpress_version']:
+        print(f"{Colors.OKBLUE}===============( WordPress Version )================={Colors.ENDC}")
+        print(f"{Colors.OKGREEN}[+] WordPress Version: {info['wordpress_version']}{Colors.ENDC}")
     
-    # Domain SID
-    if info['domain_sid']:
-        print(f"{CYAN}===============( Getting domain SID )================{RESET}")
-        print(f"{GREEN}[+] Found domain SID: {info['domain_sid']}{RESET}")
+    # Theme Information
+    if info['theme']:
+        print(f"{Colors.OKBLUE}===============( Theme Information )================={Colors.ENDC}")
+        if info['theme'].get('name'):
+            print(f"{Colors.OKGREEN}[+] Theme: {info['theme']['name']}{Colors.ENDC}")
+        if info['theme'].get('version'):
+            print(f"{Colors.OKGREEN}[+] Version: {info['theme']['version']}{Colors.ENDC}")
+        if info['theme'].get('location'):
+            print(f"{Colors.OKGREEN}[+] Location: {info['theme']['location']}{Colors.ENDC}")
+    
+    # Interesting Findings
+    if info['interesting_findings']:
+        print(f"{Colors.OKBLUE}===============( Interesting Findings )================={Colors.ENDC}")
+        for finding in info['interesting_findings']:
+            print(f"{Colors.OKGREEN}[+] {finding['description']}{Colors.ENDC}")
+            if finding.get('url'):
+                print(f"{Colors.OKGREEN}[+] URL: {finding['url']}{Colors.ENDC}")
     
     # Users
     if info['users']:
-        print(f"{CYAN}===============( Enumerating Users )================${RESET}")
-        for user in info['users'][:10]:  # Limit to 10 users
-            print(f"{GREEN}[+] Found user: {user['name']} (RID: {user['rid']}){RESET}")
-    
-    # Groups
-    if info['groups']:
-        print(f"{CYAN}===============( Enumerating Groups )================${RESET}")
-        for group in info['groups'][:10]:  # Limit to 10 groups
-            print(f"{GREEN}[+] Found group: {group['name']} (RID: {group['rid']}){RESET}")
-    
-    # Shares
-    if info['shares']:
-        print(f"{CYAN}===============( Enumerating Shares )================${RESET}")
-        for share in info['shares']:
-            print(f"{GREEN}[+] Found share: {share['name']} (Type: {share['type']}){RESET}")
-    
-    # Password Policy
-    if info['password_policy']:
-        print(f"{CYAN}===============( Password Policy Information )================${RESET}")
-        if 'min_length' in info['password_policy']:
-            print(f"{GREEN}[+] Found policy: Minimum password length: {info['password_policy']['min_length']}{RESET}")
-        if 'history' in info['password_policy']:
-            print(f"{GREEN}[+] Found policy: Password history: {info['password_policy']['history']}{RESET}")
-        if 'max_age' in info['password_policy']:
-            print(f"{GREEN}[+] Found policy: Maximum password age: {info['password_policy']['max_age']}{RESET}")
+        print(f"{Colors.OKBLUE}===============( Enumerating Users )================={Colors.ENDC}")
+        for user in info['users']:
+            print(f"{Colors.OKGREEN}[+] Found user: {user}{Colors.ENDC}")
 
-def simulate_enum_output(target_ip):
-    """Simulate enum4linux output when the tool is not available"""
-    print(f"{YELLOW}[!] enum4linux not available, simulating output...{RESET}")
+def display_attack_results(info, target_ip, port):
+    """Display password attack results"""
+    
+    print(f"{Colors.HEADER}=========[ 🔐 Password Brute Force Attempt (XML-RPC): ]=============={Colors.ENDC}")
+    print(f"{Colors.HEADER}-------------------------------------------------------------------{Colors.ENDC}")
+    
+    if info['success']:
+        print(f"{Colors.OKGREEN}[+] Password attack successful!{Colors.ENDC}")
+        print(f"{Colors.OKGREEN}[+] Username: {info['username']}{Colors.ENDC}")
+        print(f"{Colors.OKGREEN}[+] Password: {info['password']}{Colors.ENDC}")
+    else:
+        print(f"{Colors.FAIL}[+] Password attack failed{Colors.ENDC}")
+        if info['progress']:
+            print(f"{Colors.FAIL}[+] Progress: {info['progress']}%{Colors.ENDC}")
+
+def simulate_wpscan_output(target_url):
+    """Simulate WPScan output when the tool is not available"""
+    print(f"{Colors.WARNING}[!] WPScan not available, simulating output...{Colors.ENDC}")
     
     # Simulate realistic output
     info = {
-        'workgroup': 'WORKGROUP',
-        'domain': 'HOME',
-        'domain_sid': 'S-1-5-21-1234567890-1234567890-1234567890',
-        'users': [
-            {'name': 'Administrator', 'rid': '500'},
-            {'name': 'Guest', 'rid': '501'},
-            {'name': 'john', 'rid': '1000'},
-            {'name': 'jane', 'rid': '1001'}
-        ],
-        'groups': [
-            {'name': 'Domain Admins', 'rid': '512'},
-            {'name': 'Domain Users', 'rid': '513'},
-            {'name': 'Domain Guests', 'rid': '514'}
-        ],
-        'shares': [
-            {'name': 'ADMIN$', 'type': 'IPC'},
-            {'name': 'C$', 'type': 'Disk'},
-            {'name': 'IPC$', 'type': 'IPC'},
-            {'name': 'SharedDocs', 'type': 'Disk'}
-        ],
-        'password_policy': {
-            'min_length': '7',
-            'history': '24',
-            'max_age': '42 days'
+        'target_url': target_url,
+        'server_info': {
+            'server': 'Apache/2.4.62 (Debian)',
+            'x_powered_by': 'PHP/8.2.29'
         },
-        'os_info': 'Windows Server 2019'
+        'wordpress_version': '6.8.1',
+        'theme': {
+            'name': 'twentytwentyfive',
+            'version': '1.2',
+            'location': 'http://example.com/wp-content/themes/twentytwentyfive/'
+        },
+        'plugins': [],
+        'users': ['admin', 'john', 'jane'],
+        'vulnerabilities': [],
+        'interesting_findings': [
+            {
+                'type': 'xmlrpc',
+                'description': 'XML-RPC seems to be enabled',
+                'url': 'http://example.com/xmlrpc.php'
+            },
+            {
+                'type': 'readme',
+                'description': 'WordPress readme found',
+                'url': 'http://example.com/readme.html'
+            }
+        ]
     }
     
     return info
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"{RED}Usage: {sys.argv[0]} <target_ip> [port]{RESET}")
-        print(f"{YELLOW}Example: {sys.argv[0]} 192.168.1.100{RESET}")
+    if len(sys.argv) < 3:
+        print(f"{Colors.FAIL}Usage: {sys.argv[0]} <target_ip> <port>{Colors.ENDC}")
+        print(f"{Colors.WARNING}Example: {sys.argv[0]} 192.168.1.100 80{Colors.ENDC}")
         sys.exit(1)
     
     target_ip = sys.argv[1]
-    port = sys.argv[2] if len(sys.argv) > 2 else None
+    port = sys.argv[2]
+    target_url = f"http://{target_ip}:{port}/"
     
     banner()
     
     # Create output directory
-    output_dir = Path("/tmp/VirexCore/enum4linux")
+    output_dir = Path(f"/tmp/VirexCore/{target_ip}/Wpscan")
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "enum4linux_output.txt"
+    enum_output_file = output_dir / "enum_output.txt"
+    attack_output_file = output_dir / "attack_output.txt"
     
-    # Try to run enum4linux
-    output, success = run_enum4linux(target_ip, output_file)
+    # Check installation
+    if not check_installation():
+        sys.exit(1)
     
-    if success and output:
-        print(f"{GREEN}[✓] enum4linux completed successfully{RESET}")
-        info = extract_enum_info(output)
+    # Try to run WPScan enumeration
+    enum_output, enum_success = run_wpscan_enum(target_url, enum_output_file)
+    
+    if enum_success and enum_output:
+        print(f"{Colors.OKGREEN}[✓] WPScan enumeration completed successfully{Colors.ENDC}")
+        info = extract_wpscan_info(enum_output)
     else:
-        # Fallback to simulation or alternative methods
-        print(f"{YELLOW}[!] enum4linux failed, trying alternative methods...{RESET}")
-        
-        # Try smbclient and rpcclient
-        smb_output = run_smbclient_check(target_ip)
-        rpc_output = run_rpcclient_check(target_ip)
-        
-        if smb_output or rpc_output:
-            combined_output = f"{smb_output}\n{rpc_output}"
-            info = extract_enum_info(combined_output)
-            
-            # Save alternative output
-            with open(output_file, 'w') as f:
-                f.write(f"SMB Output:\n{smb_output}\n\nRPC Output:\n{rpc_output}")
+        # Fallback to simulation
+        print(f"{Colors.WARNING}[!] WPScan enumeration failed, using simulation...{Colors.ENDC}")
+        info = simulate_wpscan_output(target_url)
+    
+    # Display enumeration results
+    display_enum_results(info, target_ip, port)
+    
+    # Check if users were found
+    if info['users']:
+        # User selection
+        if len(info['users']) == 1:
+            selected_user = info['users'][0]
+            print(f"{Colors.WARNING}[!] Only one user found: {selected_user}{Colors.ENDC}")
         else:
-            # Use simulation
-            info = simulate_enum_output(target_ip)
+            print(f"{Colors.OKBLUE}[?] Target User(s) for Default Password Check:{Colors.ENDC}")
+            for i, user in enumerate(info['users'], 1):
+                print(f"    {i}) {user}")
+            print("    0) Exit")
+            
+            user_choice = prompt_with_timeout(f"{Colors.OKBLUE}[!] select a username:{Colors.ENDC}", "1")
+            if user_choice == "0":
+                sys.exit(0)
+            
+            try:
+                user_index = int(user_choice) - 1
+                if 0 <= user_index < len(info['users']):
+                    selected_user = info['users'][user_index]
+                else:
+                    selected_user = info['users'][0]
+            except ValueError:
+                selected_user = info['users'][0]
+        
+        print(f"{Colors.OKGREEN}[+] Selected user: {selected_user}{Colors.ENDC}")
+        
+        # Wordlist selection
+        wordlist = ask_wordlist()
+        
+        # Run password attack
+        attack_output, attack_success = run_wpscan_attack(target_url, selected_user, wordlist, attack_output_file)
+        
+        if attack_success and attack_output:
+            print(f"{Colors.OKGREEN}[✓] WPScan attack completed successfully{Colors.ENDC}")
+            attack_info = extract_attack_info(attack_output)
+        else:
+            print(f"{Colors.WARNING}[!] WPScan attack failed{Colors.ENDC}")
+            attack_info = {'success': False, 'username': None, 'password': None, 'progress': None}
+        
+        # Display attack results
+        display_attack_results(attack_info, target_ip, port)
+    else:
+        print(f"{Colors.WARNING}[!] No users found, skipping password attack{Colors.ENDC}")
     
-    # Display results
-    display_results(info, target_ip)
-    
-    print(f"{CYAN}===================================================={RESET}")
-    print(f"{GREEN}[!] Enum4linux scan completed. Results saved in {output_dir}{RESET}")
+    print(f"{Colors.OKBLUE}===================================================={Colors.ENDC}")
+    print(f"{Colors.OKGREEN}[!] WPScan scan completed. Results saved in {output_dir}{Colors.ENDC}")
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n{RED}[!] enum4linux interrupted by user{RESET}")
+        print(f"\n{Colors.FAIL}[!] WPScan interrupted by user{Colors.ENDC}")
         sys.exit(1)
